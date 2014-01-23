@@ -9,6 +9,7 @@ import random
 from logging import WARNING
 from logging import INFO
 import os, sys, inspect
+from coverage_model import SimplexCoverage
 
 class CovFdw(ForeignDataWrapper):
     """A foreign data wrapper for accessing an ION coverage data model.
