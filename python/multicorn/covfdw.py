@@ -34,7 +34,6 @@ from coverage_model.search.search_constants import IndexedParameters
 
 from coverage_model import SimplexCoverage, AbstractCoverage,QuantityType, ArrayType, ConstantType, CategoryType
 
-
 import random
 from random import randrange
 import os 
@@ -42,6 +41,7 @@ import datetime
 
 TIME = 'time'
 
+cov_fail_data_size = 10**5
 
 class CovFdw(ForeignDataWrapper):
     """A foreign data wrapper for accessing an ION coverage data model.
@@ -68,111 +68,185 @@ class CovFdw(ForeignDataWrapper):
 
         log_to_postgres("LOADING Coverage At Path: "+self.cov_path, WARNING)
         log_to_postgres("LOADING Coverage ID: "+self.cov_id, WARNING)
+        cov_available = False 
+        try:
+            log_to_postgres("LOADING Coverage", WARNING)
+            cov = SimplexCoverage.load(self.cov_path)
+            cov_available = True 
+            log_to_postgres("Cov Type:"+type(cov))
+        except Exception, e:
+            log_to_postgres("failed to load coverage...:" + str(e),WARNING)
+            #raise e
 
-        log_to_postgres("here")
-        cov = SimplexCoverage.load(self.cov_path)
-        log_to_postgres("here now")
 
         #time_param = ParamValueRange(IndexedParameters.Time, (1, 10))
         #coverage_id_param = ParamValue(IndexedParameters.CoverageId, self.cov_id)
         #criteria = SearchCriteria([time_param, coverage_id_param])
-
         #search = CoverageSearch(criteria, order_by=[TIME])
-
         #results = search.select()
-
         #log_to_postgres("found cov id's:"+str(results.get_found_coverage_ids()))
-
         #cov = results.get_view_coverage(self.cov_id, cov_path)
-        log_to_postgres(type(cov))
         #    def get_value_dictionary(self, param_list=None, start_index=None, end_index=None):
         #paramdata = cov.get_value_dictionary()
-        
-
         for qual in quals:
-            if (qual.field_name ==TIME):
+            if (qual.field_name == TIME):
                 log_to_postgres(
                     "qualField:"+ str(qual.field_name) 
                     + " qualOperator:" + str(qual.operator) 
                     + " qualValue:" +str(qual.value), WARNING)
-
-        cov_available = True 
-
+        
+        log_to_postgres("DataFields Requested:"+str(req_columns)+"\n", WARNING)
+        #log_to_postgres("TableFieldsAvailable:"+str(self.columns)+"\n", WARNING)
         if cov_available:
-            #log quals
-            log_to_postgres("LOADING Coverage", WARNING)
-            cov = SimplexCoverage.load(self.cov_path)
-
             #log_to_postgres("Coverage PARAMS: "+str(cov.list_parameters())+"\n", WARNING)
-            log_to_postgres("DataFields Requested:"+str(req_columns)+"\n", WARNING)
-            #log_to_postgres("TableFields:"+str(self.columns)+"\n", WARNING)
-
+            log_to_postgres("TableFields:"+str(self.columns)+"\n", WARNING)
             #time param
-            paramTime = cov.get_parameter_values(TIME)
-
+            param_time = cov.get_parameter_values(TIME)
             #mock data
-            self.generateMockRealData(len(paramTime))
-            self.generateMockTimeData(len(paramTime))
-                
-            #data object
-            data = []
-
-            #actual loop
-            for param_item in self.columns:
-                dataType = self.columns[param_item].type_name
-                log_to_postgres("Field: "+param_item+" \t DataType: "+dataType, WARNING)
-                colName = self.columns[param_item].column_name
-
-                if colName in req_columns:
-                    if (param_item == TIME):
-                        paramFromCov = self.getTimes(paramTime)
-                        data.append(paramFromCov)
-
-                    elif (colName.find(TIME)>=0):    
-                        data = self.appendMockDataBasedOnType(dataType,data)
-                    else:
-                        try:
-                            paramFromCov = cov.get_parameter_values(param_item)
-                            data.append(paramFromCov)
-                            pass
-                        except Exception, e:
-                            data = self.appendMockDataBasedOnType(dataType,data)
-                            pass
-
-                else:                
-                    data = self.appendMockDataBasedOnType(dataType,data)
+            self.generate_mock_real_data(len(param_time))
+            self.generate_mock_time_data(len(param_time))
+        else:
+            #mock data
+            log_to_postgres("added mock data:"+str(cov_fail_data_size), WARNING)
+            self.generate_mock_real_data(cov_fail_data_size)
+            self.generate_mock_time_data(cov_fail_data_size)
+            param_time = self.param_mock_time_data
             
-            #create np array to return
-            dataarray = np.array(data)
-            #return
-            return dataarray.transpose() 
+        #data object
+        start = time.time()
+        
+        data = []
+        #actual loop
+        for param_item in self.columns:
+            dataType = self.columns[param_item].type_name
+            #log_to_postgres("Field: "+param_item+" \t DataType: "+dataType, WARNING)
+            col_name = self.columns[param_item].column_name
+
+            if col_name in req_columns:
+                #if the field is time add it to the return block
+                if (param_item == TIME):
+                    param_from_cov = self.get_times(param_time)
+                    data.append(param_from_cov)
+
+                elif (col_name.find(TIME)>=0):    
+                    data = self.append_mock_data_based_on_type(dataType,data)
+                else:
+                    try:
+                        param_from_cov = cov.get_parameter_values(param_item)
+                        data.append(param_from_cov)
+                        pass
+                    except Exception, e:
+                        data = self.append_mock_data_based_on_type(dataType,data)
+                        pass
+
+            else:                
+                data = self.append_mock_data_based_on_type(dataType,data)
+
+        
+        '''
+        maybe?
+        data = dict()
+        for param_item in self.columns:
+            data[self.columns[param_item].column_name] = self.get_data_values(param_item,req_columns,param_time)
+
+        elapsedGen = (time.time() - start)
+        log_to_postgres("Time to complete data generation:"+str(elapsedGen), WARNING)   
+        
+        return data
+        '''
+        
+        #create np array to return
+        dataarray = np.array(data)
+        return dataarray.transpose()
+        '''
+        #chunking
+        chunk_size = 1000;
+        array_shape = dataarray.shape[0]
+        num = array_shape/chunk_size
+        num_count = int(math.floor(num))
+
+        log_to_postgres(str(array_shape))
+        log_to_postgres(str(dataarray.shape))
+        
+        if array_shape < 10000:
+            return dataarray
+        else:    
+            log_to_postgres("chunk yield:" + str(num_count))
+            for i in range(0,(num_count)):
+                d =None
+                if i ==0:
+                    #log_to_postgres(str(i)+ " F:"+str(0)+" T:"+str((i*chunk_size)+chunk_size))
+                    d =  dataarray[0:(i*chunk_size)+chunk_size, :]
+                elif i < num_count-1:
+                    #log_to_postgres(str(i)+ " F:"+str(i*chunk_size+1)+" T:"+str((i*chunk_size)+chunk_size))
+                    d = dataarray[(i*chunk_size+1):(i*chunk_size)+chunk_size, :]
+                else:
+                    #log_to_postgres(str(i)+ " F:"+str(i*chunk_size)+" T: ALL")
+                    d =  dataarray[i*chunk_size:, :]
+                self.yield_data(d)
+
+        log_to_postgres("complete...")
+        '''
+                
+   
  
-    def appendMockDataBasedOnType(self,data_type,data):
+    '''
+    def yield_data(self,d):
+        yield d
+
+    def get_data_values(self,param_item,req_columns,param_time):
+        dataType = self.columns[param_item].type_name  
+        col_name = self.columns[param_item].column_name       
+        if col_name in req_columns:
+                #if the field is time add it to the return block
+                if (col_name == TIME):
+                    return self.get_times(param_time)
+                elif (col_name.find(TIME)>=0):    
+                    return None
+                elif (col_name.find("_lookup")>=0):    
+                    return None    
+                else:
+                    try:
+                        return cov.get_parameter_values(col_name)
+                    except Exception, e:
+                        if (data_type == "real"):
+                            return self.paramMockData
+                        elif (data_type.startswith("timestamp")):
+                            return self.param_mock_time_data                        
+        else:                
+            return None
+        '''    
+
+
+    def append_mock_data_based_on_type(self,data_type,data):
         if (data_type == "real"):
             data.append(self.paramMockData)
         elif (data_type.startswith("timestamp")):
-            data.append(self.paramMockTimeData)
+            data.append(self.param_mock_time_data)
 
         return data            
         #log_to_postgres("added mock data", WARNING)
 
-    def generateMockRealData(self,data_length):
+    def generate_mock_real_data(self,data_length):
         start = time.time()
         self.paramMockData = np.repeat(0, [data_length], axis=0)
         elapsedGen = (time.time() - start)
         log_to_postgres("Time to complete MockData:"+str(elapsedGen), WARNING)   
 
-    def generateMockTimeData(self,data_length):
+    def generate_mock_time_data(self,data_length):
+        #generate array of legnth
+        #time is seconds since 1970-01-01 (if its a float)
         start = time.time()
-        base = datetime.datetime(1970,1,1,1,1,1)
-        arr = np.array([base + datetime.timedelta(seconds=i) for i in xrange(data_length)])
-        self.paramMockTimeData = [datetime.datetime.strftime(e, "%Y-%m-%d %H:%M:%S") for e in arr]
+        self.param_mock_time_data = np.array([1+i for i in xrange(data_length)])
+        #base = datetime.datetime(1970,1,1,1,1,1)
+        #arr = np.array([base + datetime.timedelta(seconds=i) for i in xrange(data_length)])
+        #self.param_mock_time_data = [datetime.datetime.strftime(e, "%Y-%m-%d %H:%M:%S") for e in arr]
         elapsedGen = (time.time() - start)
         log_to_postgres("Time to complete MockTimeData:"+str(elapsedGen), WARNING)          
 
-
-    def getTimes(self,paramTime):
-        base = datetime.datetime(2011,2,11,1,1,1)
-        arr = np.array([base + datetime.timedelta(hours=i) for i in xrange(len(paramTime))])
-        s = [datetime.datetime.strftime(e, "%Y-%m-%d %H:%M:%S") for e in arr]
+    #convert date time object to string
+    def get_times(self,param_time):
+        #date time float is seconds since 1970-01-01
+        #formats the datetime string as  
+        s = [datetime.datetime.strftime(datetime.datetime.utcfromtimestamp(e*1000),"%Y-%m-%d %H:%M:%S") for e in param_time]
         return s  
