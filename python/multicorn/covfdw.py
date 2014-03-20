@@ -17,7 +17,8 @@ import simplejson
 from gevent import server
 from gevent.monkey import patch_all; patch_all()
 from pyon.util.breakpoint import breakpoint
-from coverage_model import SimplexCoverage, QuantityType, ArrayType, ConstantType, CategoryType
+from pyon.util.file_sys import FileSystem, FS
+
 import gevent
 
 from multicorn import ColumnDefinition
@@ -27,10 +28,19 @@ from multicorn.compat import unicode_
 from .utils import log_to_postgres
 from logging import WARNING
 
+from coverage_model.search.coverage_search import CoverageSearch, CoverageSearchResults, SearchCoverage
+from coverage_model.search.search_parameter import ParamValue, ParamValueRange, SearchCriteria
+from coverage_model.search.search_constants import IndexedParameters
+
+from coverage_model import SimplexCoverage, AbstractCoverage,QuantityType, ArrayType, ConstantType, CategoryType
+
+
 import random
 from random import randrange
 import os 
 import datetime
+
+TIME = 'time'
 
 
 class CovFdw(ForeignDataWrapper):
@@ -44,63 +54,61 @@ class CovFdw(ForeignDataWrapper):
         super(CovFdw, self).__init__(fdw_options, fdw_columns)
         self.k = fdw_options["k"]
         self.cov_path = fdw_options["cov_path"]
-        #self.time_field = fdw_options["time_field"]
-        #self.latitude = fdw_options["latitude"]
-        #self.longitude = fdw_options["longitude"]
-        #self.timefields = fdw_options["longitude"]
+        self.cov_id = fdw_options["cov_id"]
         self.columns = fdw_columns
 
     def execute(self, quals, req_columns):
-        #start = time.time()
-
         #WARNING:  qualField:time qualOperator:>= qualValue:2011-02-11 00:00:00
         #WARNING:  qualField:time qualOperator:<= qualValue:2011-02-12 23:59:59
+        log_to_postgres("dir:"+os.getcwd())
+        os.chdir("/Users/rpsdev/externalization")
+        log_to_postgres("dir:"+os.getcwd())
 
+        #cov_path = self.cov_path[:len(self.cov_path)-len(self.cov_id)]
+
+        log_to_postgres("LOADING Coverage At Path: "+self.cov_path, WARNING)
+        log_to_postgres("LOADING Coverage ID: "+self.cov_id, WARNING)
+
+        log_to_postgres("here")
+        cov = SimplexCoverage.load(self.cov_path)
+        log_to_postgres("here now")
+
+        #time_param = ParamValueRange(IndexedParameters.Time, (1, 10))
+        #coverage_id_param = ParamValue(IndexedParameters.CoverageId, self.cov_id)
+        #criteria = SearchCriteria([time_param, coverage_id_param])
+
+        #search = CoverageSearch(criteria, order_by=[TIME])
+
+        #results = search.select()
+
+        #log_to_postgres("found cov id's:"+str(results.get_found_coverage_ids()))
+
+        #cov = results.get_view_coverage(self.cov_id, cov_path)
+        log_to_postgres(type(cov))
+        #    def get_value_dictionary(self, param_list=None, start_index=None, end_index=None):
+        #paramdata = cov.get_value_dictionary()
+        
 
         for qual in quals:
-            log_to_postgres(
-                "qualField:"+ str(qual.field_name) 
-                + " qualOperator:" + str(qual.operator) 
-                + " qualValue:" +str(qual.value), WARNING)
+            if (qual.field_name ==TIME):
+                log_to_postgres(
+                    "qualField:"+ str(qual.field_name) 
+                    + " qualOperator:" + str(qual.operator) 
+                    + " qualValue:" +str(qual.value), WARNING)
 
-            '''
-            if (str(qual.field_name) == self.time_field):
-                if (qual.operator == '>='):
-                    timeStart = qual.value
-                elif (qual.operator == '<='):    
-                    timeEnd = qual.value
+        cov_available = True 
 
-                log_to_postgres("timefield is"+str(self.time_field), WARNING)
-            '''
-
-        cov_exist = os.path.exists(self.cov_path)
-        cov_available = False
-        if (cov_exist):
-            log_to_postgres(str(self.cov_path), WARNING) 
-            cov_available = True
-            pass
-        else:
-            log_to_postgres("OMG ITS NOT THERE!", WARNING) 
-            pass    
-
-
-        if (cov_available):
+        if cov_available:
             #log quals
             log_to_postgres("LOADING Coverage", WARNING)
             cov = SimplexCoverage.load(self.cov_path)
-            
-            log_to_postgres("Coverage PARAMS: "+str(cov.list_parameters())+"\n", WARNING)
 
-            log_to_postgres("---------------------", WARNING)
-            log_to_postgres("DataFields:"+str(req_columns)+"\n", WARNING)
-            log_to_postgres("TableFields:"+str(self.columns)+"\n", WARNING)
-            log_to_postgres("---------------------", WARNING)
+            #log_to_postgres("Coverage PARAMS: "+str(cov.list_parameters())+"\n", WARNING)
+            log_to_postgres("DataFields Requested:"+str(req_columns)+"\n", WARNING)
+            #log_to_postgres("TableFields:"+str(self.columns)+"\n", WARNING)
 
             #time param
-            paramTime = cov.get_parameter_values("time")
-
-            #self.generateMockRealData(1**8)
-            #self.generateMockTimeData(1**8)
+            paramTime = cov.get_parameter_values(TIME)
 
             #mock data
             self.generateMockRealData(len(paramTime))
@@ -111,17 +119,16 @@ class CovFdw(ForeignDataWrapper):
 
             #actual loop
             for param_item in self.columns:
-
                 dataType = self.columns[param_item].type_name
                 log_to_postgres("Field: "+param_item+" \t DataType: "+dataType, WARNING)
                 colName = self.columns[param_item].column_name
 
                 if colName in req_columns:
-                    if (param_item == "time"):
+                    if (param_item == TIME):
                         paramFromCov = self.getTimes(paramTime)
                         data.append(paramFromCov)
 
-                    elif (colName.find('time')>=0):    
+                    elif (colName.find(TIME)>=0):    
                         data = self.appendMockDataBasedOnType(dataType,data)
                     else:
                         try:
@@ -147,8 +154,7 @@ class CovFdw(ForeignDataWrapper):
             data.append(self.paramMockTimeData)
 
         return data            
-
-        log_to_postgres("added mock data", WARNING)
+        #log_to_postgres("added mock data", WARNING)
 
     def generateMockRealData(self,data_length):
         start = time.time()
@@ -169,74 +175,4 @@ class CovFdw(ForeignDataWrapper):
         base = datetime.datetime(2011,2,11,1,1,1)
         arr = np.array([base + datetime.timedelta(hours=i) for i in xrange(len(paramTime))])
         s = [datetime.datetime.strftime(e, "%Y-%m-%d %H:%M:%S") for e in arr]
-        return s
-
-    def timeCode():
-        '''
-        elapsedGen = (time.time() - startGen)
-        log_to_postgres("Time to complete TimeGen:"+str(elapsedGen), WARNING)
-
-        elapsed = (time.time() - start)
-        log_to_postgres("Time to complete:"+str(elapsed), WARNING)
-        log_to_postgres("Time to complete (W/O Gen):"+str(elapsed-elapsedGen), WARNING)
-        '''
-
-    def updateDataParams():
-        #generate a data object to return to postgres
-        data = []
-        for f in self.columns:
-            if (f == "lat"):
-                data.append(paramLat) 
-            elif (f == "lon"):  
-                data.append(paramLon)
-            elif (f == "dataset_id"):    
-                data.append(paramDataset_id)
-            elif (f == "cond"):
-                data.append(paramCond)
-            elif (f == "temperature"):      
-                data.append(paramTemp)
-            elif (f == "pressure"):      
-                data.append(paramPressure)    
-            elif (f == "time"):          
-                data.append(s)
-            elif (f == "geom"):          
-                data.append(paramGEOM)
-        
-
-    def getSimpleParams():
-        #paramTime = cov.get_parameter_values('time')
-        #paramTemp = cov.get_parameter_values('temperature')
-        #paramPressure = cov.get_parameter_values('pressure')
-        pass    
-
-    def generateEmptyData():
-        '''
-        x1 = np.array("d010")
-        paramDataset_id = np.repeat(x1, [len(paramTime)], axis=0)
-        '''
-        #
-        '''
-        x2 = np.array("0101000020E610000000000000000039400000000000002640")
-        paramGEOM = np.repeat(x2, [len(paramTime)], axis=0)
-        '''
-        pass
-
-    def joinData():
-        pass
-        
-
-    def extractDataRange():
-        '''
-        
-        bitmask = ne.evaluate("time >= 20 & time <= 90")
-        paramTime = paramTime[bitmask]
-        paramTemp = paramTemp[bitmask]
-        paramCond = paramCond[bitmask]
-        #paramLat = cov.get_parameter_values('lat')
-        #paramLat = paramLat[bitmask]
-        #paramLon = cov.get_parameter_values('lon')
-        #paramLon = paramLon[bitmask]
-        diff = np.linspace(0, 1, len(paramLon))
-        paramLon = paramLon+diff
-        '''
-        pass    
+        return s  
